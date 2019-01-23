@@ -14,6 +14,7 @@ const {
   generatePath,
   updateHamtDirectory
 } = require('./hamt-utils')
+const toMulticodecCode = require('./to-multicodec-code')
 
 const defaultOptions = {
   parent: undefined,
@@ -42,8 +43,10 @@ const addLink = (context, options, callback) => {
     log('Loading parent node', options.parentCid.toBaseEncodedString())
 
     return waterfall([
-      (cb) => context.ipld.get(options.parentCid, cb),
-      (result, cb) => cb(null, result.value),
+      (cb) => context.ipld.get([options.parentCid]).first().then(
+        (node) => cb(null, node),
+        (error) => cb(error)
+      ),
       (node, cb) => addLink(context, {
         ...options,
         parent: node
@@ -110,15 +113,18 @@ const addToDirectory = (context, options, callback) => {
     (parent, done) => DAGNode.addLink(parent, new DAGLink(options.name, options.size, options.cid), done),
     (parent, done) => {
       // Persist the new parent DAGNode
-      context.ipld.put(parent, {
-        version: options.cidVersion,
-        format: options.codec,
-        hashAlg: options.hashAlg,
-        hashOnly: !options.flush
-      }, (error, cid) => done(error, {
-        node: parent,
-        cid
-      }))
+      context.ipld.put(
+        [parent],
+        toMulticodecCode(options.codec),
+        {
+          cidVersion: options.cidVersion,
+          hashAlg: toMulticodecCode(options.hashAlg),
+          hashOnly: !options.flush
+        }
+      ).first().then(
+        (cid) => done(null, { node: parent, cid }),
+        (error) => done(error)
+      )
     }
   ], callback)
 }
@@ -163,9 +169,10 @@ const updateShard = (context, positions, child, options, callback) => {
             multihash: child.cid.buffer
           }], {}, done),
           ({ node: { links: [ shard ] } }, done) => {
-            return context.ipld.get(shard.cid, (err, result) => {
-              done(err, { cid: shard.cid, node: result && result.value })
-            })
+            context.ipld.get([shard.cid]).first().then(
+              (node) => done(null, { cid: shard.cid, node }),
+              (error) => done(error)
+            )
           },
           (result, cb) => updateShardParent(context, bucket, node, link.name, result.node, result.cid, prefix, options, cb)
         ], cb)
